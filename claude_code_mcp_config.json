@@ -1,0 +1,9 @@
+{
+  "eph-mcp": {
+    "command": "/Users/user/tooma/.venv/bin/python",
+    "args": ["/Users/user/Downloads/eph_mcp/eph_mcp_fastmcp.py"],
+    "env": {
+      "PYTHONPATH": "/Users/user/Downloads/eph_mcp"
+    }
+  }
+}
