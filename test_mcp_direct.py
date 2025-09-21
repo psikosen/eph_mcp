@@ -4,7 +4,6 @@ Direct MCP integration test - Tests the actual MCP server
 """
 import asyncio
 import json
-from typing import Dict, Any
 from mcp.server.fastmcp import FastMCP
 import sys
 import os
@@ -28,8 +27,8 @@ def get_test_engine():
         })
     return test_engine
 
-@test_mcp.tool()
-async def test_think_emergently(query: str) -> str:
+@test_mcp.tool(name="test_think_emergently")
+async def tool_think_emergently(query: str) -> str:
     """Test version of think_emergently"""
     try:
         engine = get_test_engine()
@@ -44,141 +43,146 @@ async def test_think_emergently(query: str) -> str:
     except Exception as e:
         return f"Error: {str(e)}"
 
-async def test_mcp_protocol():
+def test_mcp_protocol():
     """Test the MCP protocol directly"""
-    print("\n" + "="*80)
-    print("DIRECT MCP PROTOCOL TEST")
-    print("="*80)
-    
-    print("\n Testing tool registration...")
-    
-    # Check if tools are registered
-    tools = test_mcp.list_tools()
-    print(f"    Tool registered: test_think_emergently")
-    print(f"    Tool count: 1")
-    
-    print("\n2Testing tool invocation...")
-    
-    # Test calling the tool
-    try:
-        result = await test_think_emergently("What is emergence?")
-        print(f"    Tool executed successfully")
-        print(f"    Result preview: {result[:100]}...")
-    except Exception as e:
-        print(f"    Tool execution failed: {e}")
-        return False
-    
-    print("\nTesting MCP response format...")
-    
-    # Simulate MCP-style response
-    mcp_response = {
-        "jsonrpc": "2.0",
-        "id": 1,
-        "result": {
-            "content": [
-                {
-                    "type": "text",
-                    "text": result
-                }
-            ]
-        }
-    }
-    
-    print(f"    MCP response format valid")
-    print(f"    Response size: {len(json.dumps(mcp_response))} bytes")
-    
-    print("\n Testing error handling...")
-    
-    # Test error case
-    try:
-        # This should handle gracefully
-        error_result = await test_think_emergently("")
-        if "Error" in error_result or "error" in error_result.lower():
-            print(f"    Error handling works")
-        else:
-            print(f"    Handled empty query gracefully")
-    except Exception as e:
-        print(f"    Exception not caught properly: {e}")
-    
-    print("\n" + "="*80)
-    print(" MCP PROTOCOL TEST COMPLETE")
-    print("="*80)
-    
-    print("\n Summary:")
-    print("  • Tool registration: ")
-    print("  • Tool invocation: ")
-    print("  • Response format: ")
-    print("  • Error handling: ")
-    print("\n🎉 EPH-MCP is fully compatible with MCP protocol!")
-    
-    return True
+    async def run_test() -> bool:
+        print("\n" + "="*80)
+        print("DIRECT MCP PROTOCOL TEST")
+        print("="*80)
 
-async def test_full_integration():
-    """Test full integration with all tools"""
-    print("\n" + "="*80)
-    print(" FULL INTEGRATION TEST")
-    print("="*80)
-    
-    engine = EPHReasoningEngine({
-        'explosion': {'n_fragments': 30},
-        'interaction': {'iterations': 30},
-        'visualization': {'enabled': False}
-    })
-    
-    test_cases = [
-        {
-            "name": "Emergent Reasoning",
-            "query": "What patterns emerge from randomness?",
-            "expected": ["patterns", "insights", "response"]
-        },
-        {
-            "name": "Contradiction Analysis",
-            "query": "Can something be both true and false?",
-            "expected": ["response", "statistics"]
-        },
-        {
-            "name": "Creative Exploration",
-            "query": "Imagine new forms of thinking",
-            "expected": ["response", "duration"]
-        }
-    ]
-    
-    all_passed = True
-    
-    for i, test_case in enumerate(test_cases, 1):
-        print(f"\n Test {i}: {test_case['name']}")
-        print("-"*40)
-        
+        print("\n Testing tool registration...")
+
+        # Check if tools are registered
+        tools = await test_mcp.list_tools()
+        print("    Tool registered: test_think_emergently")
+        print(f"    Tool count: {len(tools)}")
+
+        print("\n2Testing tool invocation...")
+
+        # Test calling the tool
         try:
-            result = await engine.reason(test_case['query'])
-            
-            # Check expected fields
-            missing = []
-            for field in test_case['expected']:
-                if field not in result and field not in result.get('statistics', {}):
-                    missing.append(field)
-            
-            if missing:
-                print(f"    Missing fields: {missing}")
-                all_passed = False
-            else:
-                print(f"    All expected fields present")
-                print(f"    Patterns: {result['statistics']['patterns']['total']}")
-                print(f"    Insights: {result['statistics']['insights']['total']}")
-                print(f"     Duration: {result['duration']:.2f}s")
-                
+            result = await tool_think_emergently("What is emergence?")
+            print("    Tool executed successfully")
+            print(f"    Result preview: {result[:100]}...")
         except Exception as e:
-            print(f"    Test failed: {e}")
-            all_passed = False
-    
-    print("\n" + "="*80)
-    if all_passed:
-        print(" ALL INTEGRATION TESTS PASSED")
-    else:
-        print(" SOME TESTS FAILED")
-    print("="*80)
-    
-    return all_passed
+            print(f"    Tool execution failed: {e}")
+            return False
+
+        print("\nTesting MCP response format...")
+
+        # Simulate MCP-style response
+        mcp_response = {
+            "jsonrpc": "2.0",
+            "id": 1,
+            "result": {
+                "content": [
+                    {
+                        "type": "text",
+                        "text": result
+                    }
+                ]
+            }
+        }
+
+        print("    MCP response format valid")
+        print(f"    Response size: {len(json.dumps(mcp_response))} bytes")
+
+        print("\n Testing error handling...")
+
+        # Test error case
+        try:
+            error_result = await tool_think_emergently("")
+            if "Error" in error_result or "error" in error_result.lower():
+                print("    Error handling works")
+            else:
+                print("    Handled empty query gracefully")
+        except Exception as e:
+            print(f"    Exception not caught properly: {e}")
+
+        print("\n" + "="*80)
+        print(" MCP PROTOCOL TEST COMPLETE")
+        print("="*80)
+
+        print("\n Summary:")
+        print("  • Tool registration: ")
+        print("  • Tool invocation: ")
+        print("  • Response format: ")
+        print("  • Error handling: ")
+        print("\n🎉 EPH-MCP is fully compatible with MCP protocol!")
+
+        return True
+
+    assert asyncio.run(run_test())
+
+
+def test_full_integration():
+    """Test full integration with all tools"""
+    async def run_test() -> bool:
+        print("\n" + "="*80)
+        print(" FULL INTEGRATION TEST")
+        print("="*80)
+
+        engine = EPHReasoningEngine({
+            'explosion': {'n_fragments': 30},
+            'interaction': {'iterations': 30},
+            'visualization': {'enabled': False}
+        })
+
+        test_cases = [
+            {
+                "name": "Emergent Reasoning",
+                "query": "What patterns emerge from randomness?",
+                "expected": ["patterns", "insights", "response"]
+            },
+            {
+                "name": "Contradiction Analysis",
+                "query": "Can something be both true and false?",
+                "expected": ["response", "statistics"]
+            },
+            {
+                "name": "Creative Exploration",
+                "query": "Imagine new forms of thinking",
+                "expected": ["response", "duration"]
+            }
+        ]
+
+        all_passed = True
+
+        for i, test_case in enumerate(test_cases, 1):
+            print(f"\n Test {i}: {test_case['name']}")
+            print("-"*40)
+
+            try:
+                result = await engine.reason(test_case['query'])
+
+                missing = []
+                for field in test_case['expected']:
+                    if field not in result and field not in result.get('statistics', {}):
+                        missing.append(field)
+
+                if missing:
+                    print(f"    Missing fields: {missing}")
+                    all_passed = False
+                else:
+                    print("    All expected fields present")
+                    print(f"    Patterns: {result['statistics']['patterns']['total']}")
+                    print(f"    Insights: {result['statistics']['insights']['total']}")
+                    print(f"     Duration: {result['duration']:.2f}s")
+
+            except Exception as e:
+                print(f"    Test failed: {e}")
+                all_passed = False
+
+        print("\n" + "="*80)
+        if all_passed:
+            print(" ALL INTEGRATION TESTS PASSED")
+        else:
+            print(" SOME TESTS FAILED")
+        print("="*80)
+
+        return all_passed
+
+    assert asyncio.run(run_test())
 
 async def main():
     """Run all tests"""

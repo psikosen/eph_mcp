@@ -4,20 +4,64 @@ Generate diverse thought fragments using multiple strategies
 """
 import random
 import numpy as np
-from typing import List, Dict, Any, Optional
+import hashlib
+from typing import List
 from sentence_transformers import SentenceTransformer
-import re
-from .. import ThoughtFragment, BondType
+from .. import ThoughtFragment
 import asyncio
 import spacy
+from ..logging_utils import get_logger
+
+
+class FallbackEmbedder:
+    """Deterministic embedding fallback for offline environments."""
+
+    def __init__(self, dimension: int = 384):
+        self.dimension = dimension
+
+    def encode(self, text: str) -> np.ndarray:
+        vector = np.zeros(self.dimension, dtype=float)
+        if not text:
+            return vector
+
+        tokens = text.lower().split()
+        for idx, token in enumerate(tokens):
+            digest = hashlib.blake2b(token.encode('utf-8'), digest_size=32).digest()
+            for offset, byte in enumerate(digest):
+                vector[(idx + offset) % self.dimension] += byte / 255.0
+
+        norm = np.linalg.norm(vector)
+        if norm > 0:
+            vector /= norm
+        return vector
 
 class ThoughtExplosion:
     """Generate diverse thought fragments from a query"""
     
     def __init__(self, model_name: str = "all-MiniLM-L6-v2"):
         """Initialize with embedding model"""
-        self.embedder = SentenceTransformer(model_name)
-        self.nlp = spacy.load("en_core_web_sm", disable=["ner", "parser"])
+        self.logger = get_logger(__name__, "explosion", classname=self.__class__.__name__)
+        self.model_name = model_name
+        self.using_fallback = False
+
+        try:
+            self.embedder = SentenceTransformer(model_name)
+        except Exception as exc:
+            self.logger.error(
+                "Failed to load embedding model; using fallback",
+                extra={'error': str(exc), 'context': {'model_name': model_name}}
+            )
+            self.embedder = FallbackEmbedder()
+            self.using_fallback = True
+
+        try:
+            self.nlp = spacy.load("en_core_web_sm", disable=["ner", "parser"])
+        except OSError as exc:
+            self.logger.error(
+                "spaCy model unavailable; using blank pipeline",
+                extra={'error': str(exc)}
+            )
+            self.nlp = spacy.blank("en")
         self.temperature = 1.5  # High temperature for diversity
         
         # Strategy weights for selection
@@ -42,7 +86,6 @@ class ThoughtExplosion:
         
         # Parse query for context
         query_embedding = self.embedder.encode(query)
-        query_tokens = self.nlp(query)
         
         # Generate fragments using weighted random selection of strategies
         strategies = list(self.strategy_weights.keys())
@@ -92,6 +135,32 @@ class ThoughtExplosion:
             content = await method(query, query_embedding)
             return (content, strategy)
         return (None, strategy)
+
+    def set_embedding_model(self, model_name: str) -> None:
+        """Update the embedding model used for fragment generation."""
+
+        if model_name and model_name != self.model_name:
+            current_embedder = self.embedder
+            current_fallback = self.using_fallback
+
+            try:
+                new_embedder = SentenceTransformer(model_name)
+            except Exception as exc:
+                self.logger.error(
+                    "Failed to update embedding model; retaining current embedder",
+                    extra={'error': str(exc), 'context': {'model_name': model_name}}
+                )
+                self.embedder = current_embedder
+                self.using_fallback = current_fallback
+                return
+
+            self.embedder = new_embedder
+            self.model_name = model_name
+            self.using_fallback = False
+            self.logger.info(
+                "Embedding model updated",
+                extra={'context': {'model_name': model_name}}
+            )
     
     async def _free_associate(self, query: str, embedding: np.ndarray) -> str:
         """Random associations from query"""

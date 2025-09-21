@@ -11,6 +11,7 @@ import os
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 from eph_mcp.reasoning_engine import EPHReasoningEngine
+from eph_mcp.server import EPHMCPServer, AnalyzePatternInput
 from eph_mcp import ThoughtFragment, EmergentPattern, PatternType
 
 class TestEPHBasics(unittest.TestCase):
@@ -111,9 +112,30 @@ class TestAsyncReasoning(unittest.TestCase):
             return result
         
         result = asyncio.run(run_test())
-        print(f"\n✓ Reasoning with intermediate data completed")
+        print("\n✓ Reasoning with intermediate data completed")
         print(f"  Generated {len(result['intermediate']['fragments'])} fragment samples")
-    
+
+    def test_reasoning_config_override(self):
+        """Ensure per-request configuration overrides are respected"""
+
+        async def run_test():
+            result = await self.engine.reason(
+                "How do overrides change reasoning?",
+                config_overrides={'explosion': {'n_fragments': 3}},
+                return_intermediate=False
+            )
+
+            self.assertIn('session_id', result)
+            session = self.engine.reasoning_history[-1]
+
+            self.assertEqual(session['config']['explosion']['n_fragments'], 3)
+            self.assertEqual(session['phases']['explosion']['n_fragments'], 3)
+            self.assertEqual(self.engine.config['explosion']['n_fragments'], 5)
+
+            return result
+
+        asyncio.run(run_test())
+
     def test_error_handling(self):
         """Test error handling in reasoning"""
         async def run_test():
@@ -131,12 +153,12 @@ class TestAsyncReasoning(unittest.TestCase):
             
             return result
         
-        result = asyncio.run(run_test())
-        print(f"\n✓ Error handling test completed")
+        asyncio.run(run_test())
+        print("\n✓ Error handling test completed")
 
 class TestPhases(unittest.TestCase):
     """Test individual phases"""
-    
+
     def setUp(self):
         """Set up test environment"""
         self.engine = EPHReasoningEngine({
@@ -196,9 +218,46 @@ class TestPhases(unittest.TestCase):
         
         field = asyncio.run(run_test())
         state = field.get_state()
-        print(f"\n✓ Interaction phase completed")
+        print("\n✓ Interaction phase completed")
         print(f"  Field entropy: {state['entropy']:.2f}")
         print(f"  Bonds formed: {state['num_bonds']}")
+
+
+class TestServerUtilities(unittest.TestCase):
+    """Server level utilities"""
+
+    @classmethod
+    def setUpClass(cls):
+        cls.server = EPHMCPServer({
+            'explosion': {'n_fragments': 5},
+            'interaction': {'iterations': 3},
+            'visualization': {'enabled': False}
+        })
+
+    def test_analyze_patterns_filter(self):
+        """Verify pattern type filtering in analyze_patterns"""
+
+        async def run_test():
+            input_model = AnalyzePatternInput(
+                text=(
+                    "Collaboration improves outcomes. "
+                    "Collaboration does not improve outcomes. "
+                    "Collaboration improves teamwork. "
+                    "Collaboration improves trust."
+                ),
+                pattern_types=["contradiction"],
+                min_confidence=0.6
+            )
+
+            response = await self.server.analyze_patterns(input_model)
+            self.assertTrue(response)
+
+            texts = [item.text for item in response if hasattr(item, 'text')]
+            combined = "\n".join(texts)
+            self.assertIn("Contradiction", combined)
+            self.assertNotIn("Repetition", combined)
+
+        asyncio.run(run_test())
 
 def main():
     """Run tests"""
