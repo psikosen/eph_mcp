@@ -2,11 +2,10 @@
 Main Reasoning Engine for Emergent Pattern Hunter
 Orchestrates all phases of the EPH process
 """
-import asyncio
 import time
-import json
+import copy
+import uuid
 from typing import Dict, List, Optional, Any
-from dataclasses import asdict
 
 from .phases.explosion import ThoughtExplosion
 from .phases.interaction import InteractionField
@@ -15,13 +14,14 @@ from .phases.crystallization import PatternCrystallizer
 from .phases.weaving import PatternWeaver
 from . import ReasoningField, ThoughtFragment, EmergentPattern, CrystallizedInsight
 from .visualization import FieldVisualizer
+from .logging_utils import get_logger
 
 class EPHReasoningEngine:
     """Main engine that orchestrates the EPH reasoning process"""
     
     def __init__(self, config: Optional[Dict] = None):
         """Initialize reasoning engine with configuration"""
-        
+
         # Default configuration
         self.config = {
             'explosion': {
@@ -56,7 +56,9 @@ class EPHReasoningEngine:
         # Update with provided config
         if config:
             self._update_config(self.config, config)
-        
+
+        self.logger = get_logger(__name__, "reasoning_engine", classname=self.__class__.__name__)
+
         # Initialize phases
         self.explosion = ThoughtExplosion(
             model_name=self.config['explosion']['embedding_model']
@@ -77,139 +79,263 @@ class EPHReasoningEngine:
         self.reasoning_history = []
         self.current_session = None
         
-    async def reason(self, query: str, 
-                    return_intermediate: bool = False) -> Dict[str, Any]:
+    async def reason(self, query: str,
+                    return_intermediate: bool = False,
+                    *,
+                    config_overrides: Optional[Dict[str, Any]] = None,
+                    visualize: Optional[bool] = None) -> Dict[str, Any]:
         """
         Main reasoning method - orchestrates all phases
-        
+
         Args:
             query: The question or prompt to reason about
             return_intermediate: Whether to return intermediate results
-            
+            config_overrides: Per-request configuration overrides
+            visualize: Optional override to enable/disable visualization
+
         Returns:
             Dict containing response and optionally intermediate results
         """
-        
+
+        effective_config = copy.deepcopy(self.config)
+        if config_overrides:
+            self._update_config(effective_config, config_overrides)
+
+        if visualize is not None:
+            effective_config.setdefault('visualization', {})
+            effective_config['visualization']['enabled'] = visualize
+
+        visualization_config = effective_config.get('visualization', {})
+        visualization_enabled = visualization_config.get('enabled', False)
+        visualizer = None
+
+        if visualization_enabled:
+            output_dir = visualization_config.get(
+                'output_dir',
+                self.config['visualization']['output_dir']
+            )
+
+            if self.visualizer is None or self.visualizer.output_dir != output_dir:
+                self.visualizer = FieldVisualizer(output_dir=output_dir)
+            visualizer = self.visualizer
+
         start_time = time.time()
-        
+
         # Create session
-        session_id = f"session_{int(time.time())}"
+        session_id = f"session_{uuid.uuid4().hex}"
         self.current_session = {
             'id': session_id,
             'query': query,
             'start_time': start_time,
-            'phases': {}
+            'phases': {},
+            'config': effective_config
         }
-        
+
+        self.logger.info(
+            "Starting reasoning session",
+            extra={
+                'context': {
+                    'session_id': session_id,
+                    'query_preview': query[:80],
+                    'visualization': visualization_enabled
+                }
+            }
+        )
+
         try:
             # Phase 1: Thought Explosion
-            print(f"🔥 Phase 1: Exploding thoughts for: {query[:50]}...")
-            fragments = await self._phase_explosion(query)
-            
+            self.logger.info(
+                "Phase 1: Thought explosion",
+                extra={'context': {'session_id': session_id}}
+            )
+            fragments = await self._phase_explosion(query, effective_config)
+
             # Phase 2: Interaction Dynamics
-            print(f"⚡ Phase 2: Simulating interactions between {len(fragments)} fragments...")
-            field = await self._phase_interaction(fragments)
-            
+            self.logger.info(
+                "Phase 2: Interaction dynamics",
+                extra={'context': {'session_id': session_id, 'fragment_count': len(fragments)}}
+            )
+            field = await self._phase_interaction(fragments, effective_config)
+
             # Phase 3: Pattern Detection
-            print(f"🔍 Phase 3: Detecting emergent patterns...")
-            patterns = await self._phase_detection(field)
-            
+            self.logger.info(
+                "Phase 3: Pattern detection",
+                extra={'context': {'session_id': session_id}}
+            )
+            patterns = await self._phase_detection(field, effective_config)
+
             # Phase 4: Pattern Crystallization
-            print(f"💎 Phase 4: Crystallizing {sum(len(p) for p in patterns.values())} patterns...")
-            insights = await self._phase_crystallization(patterns, field)
-            
+            self.logger.info(
+                "Phase 4: Pattern crystallization",
+                extra={
+                    'context': {
+                        'session_id': session_id,
+                        'pattern_total': sum(len(p) for p in patterns.values())
+                    }
+                }
+            )
+            insights = await self._phase_crystallization(patterns, field, effective_config)
+
             # Phase 5: Pattern Weaving
-            print(f"🧵 Phase 5: Weaving {len(insights)} insights into response...")
-            response = await self._phase_weaving(insights, query)
-            
+            self.logger.info(
+                "Phase 5: Pattern weaving",
+                extra={'context': {'session_id': session_id, 'insight_count': len(insights)}}
+            )
+            response = await self._phase_weaving(insights, query, effective_config)
+
             # Generate visualization if enabled
-            if self.visualizer:
-                await self._generate_visualizations(field, patterns, insights)
-            
+            if visualizer:
+                await self._generate_visualizations(field, patterns, insights, visualizer)
+
             # Prepare results
             end_time = time.time()
             self.current_session['end_time'] = end_time
             self.current_session['duration'] = end_time - start_time
-            
+
             result = {
                 'response': response,
                 'session_id': session_id,
                 'duration': end_time - start_time,
                 'statistics': self._generate_statistics(field, patterns, insights)
             }
-            
+
             if return_intermediate:
                 result['intermediate'] = {
-                    'fragments': [f.to_dict() for f in fragments[:10]],  # Sample
+                    'fragments': [f.to_dict() for f in fragments[:10]],
                     'field_state': field.get_state(),
                     'patterns': self._serialize_patterns(patterns),
                     'insights': [self._serialize_insight(i) for i in insights]
                 }
-            
+
             # Store in history
             self.reasoning_history.append(self.current_session)
-            
+
+            self.logger.info(
+                "Reasoning session completed",
+                extra={
+                    'context': {
+                        'session_id': session_id,
+                        'duration_seconds': round(end_time - start_time, 3),
+                        'insight_count': len(insights)
+                    }
+                }
+            )
+
             return result
-            
+
         except Exception as e:
-            print(f"❌ Error during reasoning: {e}")
+            self.logger.error(
+                "Error during reasoning session",
+                extra={'error': str(e), 'context': {'session_id': session_id}}
+            )
+            self.current_session = None
             return {
                 'response': f"An error occurred during reasoning: {str(e)}",
                 'error': str(e),
                 'session_id': session_id
             }
     
-    async def _phase_explosion(self, query: str) -> List[ThoughtFragment]:
+    async def _phase_explosion(self, query: str, config: Dict[str, Any]) -> List[ThoughtFragment]:
         """Phase 1: Thought Explosion"""
-        
+
         phase_start = time.time()
-        
+
+        explosion_config = config.get('explosion', {})
+
+        n_fragments = max(1, int(explosion_config.get(
+            'n_fragments',
+            self.config['explosion']['n_fragments']
+        )))
+
+        temperature = explosion_config.get('temperature')
+        if temperature is not None:
+            self.explosion.temperature = max(0.1, float(temperature))
+
+        model_name = explosion_config.get('embedding_model')
+        if model_name:
+            try:
+                self.explosion.set_embedding_model(model_name)
+            except Exception as exc:
+                self.logger.error(
+                    "Failed to update embedding model",
+                    extra={'error': str(exc), 'context': {'model_name': model_name}}
+                )
+
         fragments = await self.explosion.explode(
-            query, 
-            n=self.config['explosion']['n_fragments']
+            query,
+            n=n_fragments
         )
-        
+
         self.current_session['phases']['explosion'] = {
             'duration': time.time() - phase_start,
             'n_fragments': len(fragments),
-            'strategies_used': list(set(f.generation_strategy for f in fragments))
+            'strategies_used': list(set(f.generation_strategy for f in fragments)),
+            'temperature': self.explosion.temperature
         }
-        
+
         return fragments
-    
-    async def _phase_interaction(self, fragments: List[ThoughtFragment]) -> ReasoningField:
+
+    async def _phase_interaction(self, fragments: List[ThoughtFragment],
+                                 config: Dict[str, Any]) -> ReasoningField:
         """Phase 2: Interaction Dynamics"""
         
         phase_start = time.time()
         
+        interaction_config = config.get('interaction', {})
+
+        initial_temperature = float(interaction_config.get(
+            'initial_temperature',
+            self.config['interaction']['initial_temperature']
+        ))
+        dt = float(interaction_config.get('dt', self.config['interaction']['dt']))
+        iterations = max(1, int(interaction_config.get(
+            'iterations',
+            self.config['interaction']['iterations']
+        )))
+        cooling_rate = float(interaction_config.get(
+            'cooling_rate',
+            self.config['interaction']['cooling_rate']
+        ))
+
         # Set interaction parameters
-        self.interaction.temperature = self.config['interaction']['initial_temperature']
-        self.interaction.dt = self.config['interaction']['dt']
-        
+        self.interaction.temperature = initial_temperature
+        self.interaction.dt = dt
+        self.interaction.cooling_rate = cooling_rate
+        self.interaction.phase_transitions = []
+
         # Run simulation
         field = await self.interaction.simulate(
             fragments,
-            iterations=self.config['interaction']['iterations']
+            iterations=iterations
         )
-        
+
         self.current_session['phases']['interaction'] = {
             'duration': time.time() - phase_start,
-            'iterations': self.config['interaction']['iterations'],
+            'iterations': iterations,
             'final_temperature': self.interaction.temperature,
             'n_bonds': len(field.bonds),
-            'phase_transitions': len(self.interaction.phase_transitions)
+            'phase_transitions': len(self.interaction.phase_transitions),
+            'cooling_rate': self.interaction.cooling_rate
         }
-        
+
         return field
-    
-    async def _phase_detection(self, field: ReasoningField) -> Dict[str, List[EmergentPattern]]:
+
+    async def _phase_detection(self, field: ReasoningField,
+                               config: Dict[str, Any]) -> Dict[str, List[EmergentPattern]]:
         """Phase 3: Pattern Detection"""
         
         phase_start = time.time()
         
         # Configure detector
-        self.detector.min_pattern_size = self.config['detection']['min_pattern_size']
-        self.detector.pattern_threshold = self.config['detection']['pattern_threshold']
+        detection_config = config.get('detection', {})
+        self.detector.min_pattern_size = detection_config.get(
+            'min_pattern_size',
+            self.config['detection']['min_pattern_size']
+        )
+        self.detector.pattern_threshold = detection_config.get(
+            'pattern_threshold',
+            self.config['detection']['pattern_threshold']
+        )
         
         # Detect patterns
         patterns = await self.detector.detect_patterns(field)
@@ -227,15 +353,23 @@ class EPHReasoningEngine:
         
         return patterns
     
-    async def _phase_crystallization(self, patterns: Dict[str, List[EmergentPattern]], 
-                                    field: ReasoningField) -> List[CrystallizedInsight]:
+    async def _phase_crystallization(self, patterns: Dict[str, List[EmergentPattern]],
+                                    field: ReasoningField,
+                                    config: Dict[str, Any]) -> List[CrystallizedInsight]:
         """Phase 4: Pattern Crystallization"""
         
         phase_start = time.time()
         
         # Configure crystallizer
-        self.crystallizer.confidence_threshold = self.config['crystallization']['confidence_threshold']
-        self.crystallizer.novelty_threshold = self.config['crystallization']['novelty_threshold']
+        crystallization_config = config.get('crystallization', {})
+        self.crystallizer.confidence_threshold = crystallization_config.get(
+            'confidence_threshold',
+            self.config['crystallization']['confidence_threshold']
+        )
+        self.crystallizer.novelty_threshold = crystallization_config.get(
+            'novelty_threshold',
+            self.config['crystallization']['novelty_threshold']
+        )
         
         # Crystallize patterns
         insights = await self.crystallizer.crystallize_patterns(patterns, field)
@@ -249,59 +383,76 @@ class EPHReasoningEngine:
         
         return insights
     
-    async def _phase_weaving(self, insights: List[CrystallizedInsight], 
-                            query: str) -> str:
+    async def _phase_weaving(self, insights: List[CrystallizedInsight],
+                            query: str,
+                            config: Dict[str, Any]) -> str:
         """Phase 5: Pattern Weaving"""
         
         phase_start = time.time()
         
         # Configure weaver
-        self.weaver.max_insights_per_response = self.config['weaving']['max_insights']
-        self.weaver.coherence_threshold = self.config['weaving']['coherence_threshold']
+        weaving_config = config.get('weaving', {})
+        self.weaver.max_insights_per_response = weaving_config.get(
+            'max_insights',
+            self.config['weaving']['max_insights']
+        )
+        self.weaver.coherence_threshold = weaving_config.get(
+            'coherence_threshold',
+            self.config['weaving']['coherence_threshold']
+        )
         
         # Weave response
         response = await self.weaver.weave(insights, query)
         
         self.current_session['phases']['weaving'] = {
             'duration': time.time() - phase_start,
-            'insights_used': min(len(insights), self.config['weaving']['max_insights']),
+            'insights_used': min(len(insights), self.weaver.max_insights_per_response),
             'response_length': len(response)
         }
-        
+
         return response
     
-    async def _generate_visualizations(self, field: ReasoningField, 
-                                      patterns: Dict[str, List[EmergentPattern]], 
-                                      insights: List[CrystallizedInsight]):
+    async def _generate_visualizations(self, field: ReasoningField,
+                                      patterns: Dict[str, List[EmergentPattern]],
+                                      insights: List[CrystallizedInsight],
+                                      visualizer: Optional[FieldVisualizer]):
         """Generate visualizations of the reasoning process"""
-        
-        if not self.visualizer:
+
+        if not visualizer:
             return
-        
+
         try:
             # Visualize field state
-            field_viz = await self.visualizer.visualize_field(field)
-            
+            field_viz = await visualizer.visualize_field(field)
+
             # Visualize patterns
-            pattern_viz = await self.visualizer.visualize_patterns(patterns, field)
-            
+            pattern_viz = await visualizer.visualize_patterns(patterns, field)
+
             # Visualize insight network
-            insight_viz = await self.visualizer.visualize_insights(insights)
-            
+            insight_viz = await visualizer.visualize_insights(insights)
+
             # Generate summary visualization
-            summary_viz = await self.visualizer.generate_summary(
+            summary_viz = await visualizer.generate_summary(
                 field, patterns, insights, self.current_session
             )
-            
+
             self.current_session['visualizations'] = {
                 'field': field_viz,
                 'patterns': pattern_viz,
                 'insights': insight_viz,
                 'summary': summary_viz
             }
-            
+
         except Exception as e:
-            print(f"Warning: Visualization failed: {e}")
+            self.logger.error(
+                "Visualization generation failed",
+                extra={
+                    'error': str(e),
+                    'context': {
+                        'session_id': self.current_session['id'] if self.current_session else None
+                    }
+                }
+            )
     
     def _generate_statistics(self, field: ReasoningField, 
                            patterns: Dict[str, List[EmergentPattern]], 

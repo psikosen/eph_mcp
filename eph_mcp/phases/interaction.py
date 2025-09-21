@@ -3,10 +3,8 @@ Phase 2: Interaction Dynamics
 Simulate interactions between thought fragments in semantic field
 """
 import numpy as np
-from typing import List, Dict, Tuple, Optional
+from typing import List, Dict
 from scipy.spatial.distance import cosine, euclidean
-from sklearn.metrics.pairwise import cosine_similarity
-import networkx as nx
 from .. import ThoughtFragment, Bond, BondType, ReasoningField
 import asyncio
 
@@ -34,20 +32,26 @@ class InteractionField:
         self.temperature = 1.0  # System temperature
         self.friction = 0.1  # Damping factor
         self.dt = 0.01  # Time step
+        self.cooling_rate = 0.995
         
         # Tracking
         self.interaction_history = []
         self.phase_transitions = []
     
-    async def simulate(self, fragments: List[ThoughtFragment], 
+    async def simulate(self, fragments: List[ThoughtFragment],
                        iterations: int = 100) -> ReasoningField:
         """Simulate field evolution with fragment interactions"""
-        
+
+        # Reset field state for a fresh simulation
+        self.field = ReasoningField(dimensions=self.dimensions)
+        self.interaction_history = []
+        self.phase_transitions = []
+
         # Get actual embedding dimensions from fragments
         if fragments and fragments[0].embedding is not None:
             self.dimensions = len(fragments[0].embedding)
             self.field.dimensions = self.dimensions
-        
+
         # Initialize field with fragments
         for fragment in fragments:
             self.field.add_fragment(fragment)
@@ -57,7 +61,7 @@ class InteractionField:
             await self._simulation_step(iteration)
             
             # Cool system gradually (simulated annealing)
-            self.temperature *= 0.995
+            self.temperature *= self.cooling_rate
             
             # Check for phase transitions
             if self._detect_phase_transition():
